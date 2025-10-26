@@ -1,3 +1,4 @@
+# **LifeStream Backend API Documentation**
 ## **Table of Contents**
 
 - [Overview](#overview)

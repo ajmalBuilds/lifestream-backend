@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -54,7 +54,7 @@ class App {
     this.app.use('/api/requests', requestRoutes);
 
     // Health check route
-    this.app.get('/health', (req, res) => {
+    this.app.get('/health', (req: Request, res: Response) => {
       res.status(200).json({
         status: 'success',
         message: 'LifeStream API is running!',
@@ -63,7 +63,7 @@ class App {
     });
 
     // Root route
-    this.app.get('/', (req, res) => {
+    this.app.get('/', (req: Request, res: Response) => {
       res.status(200).json({
         status: 'success',
         message: 'LifeStream Backend API',
@@ -79,20 +79,20 @@ class App {
 
   private initializeErrorHandling(): void {
     // 404 handler - MUST be after all other routes
-    this.app.use((req, res) => {
-        res.status(404).json({
-          status: 'error',
-          message: `Route ${req.originalUrl} not found`,
-        });
+    this.app.use((req: Request, res: Response) => {
+      res.status(404).json({
+        status: 'error',
+        message: `Route ${req.originalUrl} not found`,
       });
+    });
 
     // Global error handler
     this.app.use(
       (
         error: any,
-        req: express.Request,
-        res: express.Response,
-        next: express.NextFunction
+        req: Request,
+        res: Response,
+        next: NextFunction
       ) => {
         console.error('Global error handler:', error);
         res.status(error.status || 500).json({

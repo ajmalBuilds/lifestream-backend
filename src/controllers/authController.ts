@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { pool } from '../config/database';
 import { config } from '../config/env';
+import { AuthenticatedRequest } from '../types/express';
 
 // Types
 interface RegisterRequest {
@@ -25,11 +26,6 @@ interface AuthToken {
   id: string;
   email: string;
   userType: string;
-}
-
-// JWT Sign Options interface
-interface JWTSignOptions {
-  expiresIn: string | number;
 }
 
 export const authController = {
@@ -110,14 +106,11 @@ export const authController = {
         userType: user.user_type
       };
 
-      const signOptions: jwt.SignOptions = {
-        expiresIn: config.jwtExpiresIn
-      };
-
+      // FIX: Use type assertion for expiresIn
       const token = jwt.sign(
         tokenPayload,
         config.jwtSecret,
-        signOptions
+        { expiresIn: config.jwtExpiresIn as jwt.SignOptions['expiresIn'] }
       );
 
       res.status(201).json({
@@ -196,14 +189,11 @@ export const authController = {
         userType: user.user_type
       };
 
-      const signOptions: jwt.SignOptions = {
-        expiresIn: config.jwtExpiresIn
-      };
-
+      // FIX: Use type assertion for expiresIn
       const token = jwt.sign(
         tokenPayload,
         config.jwtSecret,
-        signOptions
+        { expiresIn: config.jwtExpiresIn as jwt.SignOptions['expiresIn'] }
       );
 
       res.status(200).json({
@@ -305,7 +295,7 @@ export const authController = {
       const resetToken = jwt.sign(
         resetTokenPayload,
         config.jwtSecret,
-        { expiresIn: '1h' } as jwt.SignOptions
+        { expiresIn: '1h' as jwt.SignOptions['expiresIn'] }
       );
 
       // In a real implementation, you'd send an email with the reset token
@@ -392,10 +382,9 @@ export const authController = {
   },
 
   // Get current user (for token verification)
-  getMe: async (req: Request, res: Response): Promise<void> => {
+  getMe: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-      // This requires auth middleware to be applied first
-      const userId = (req as any).user?.id;
+      const userId = req.user?.id;
 
       if (!userId) {
         res.status(401).json({
@@ -450,10 +439,10 @@ export const authController = {
     }
   },
 
-  // Update user profile (alternative to userController for basic updates)
-  updateProfile: async (req: Request, res: Response): Promise<void> => {
+  // Update user profile
+  updateProfile: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-      const userId = (req as any).user?.id;
+      const userId = req.user?.id;
       const { name, phone, dateOfBirth, gender } = req.body;
 
       if (!userId) {

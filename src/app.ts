@@ -11,6 +11,7 @@ import { testConnection } from './config/database';
 import { authRoutes } from './routes/auth';
 import { userRoutes } from './routes/users';
 import { requestRoutes } from './routes/requests';
+import { chatRoutes } from './routes/chat'
 
 // Import socket handlers
 import { setupSocketHandlers } from './sockets/socketHandlers';
@@ -52,6 +53,7 @@ class App {
     this.app.use('/api/auth', authRoutes);
     this.app.use('/api/users', userRoutes);
     this.app.use('/api/requests', requestRoutes);
+    this.app.use('/api/chat', chatRoutes);
 
     // Health check route
     this.app.get('/health', (req: Request, res: Response) => {

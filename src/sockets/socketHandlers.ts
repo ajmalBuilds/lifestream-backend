@@ -47,8 +47,8 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
   });
 
   io.on('connection', (socket: AuthenticatedSocket) => {
-    console.log('New client connected:', socket.id, 'User:', socket.user?.email);
-    console.log('Total connected clients:', io.engine.clientsCount);
+    console.log('🔌 New client connected:', socket.id, 'User:', socket.user?.email);
+    console.log('📡 Total connected clients:', io.engine.clientsCount);
 
     // Send welcome message
     socket.emit('welcome', { 
@@ -65,7 +65,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       }
       
       socket.join(`user:${userId}`);
-      console.log(`User ${userId} joined their room`);
+      console.log(`👤 User ${userId} joined their room`);
       socket.emit('joined-room', { 
         room: `user:${userId}`,
         userId: userId 
@@ -74,7 +74,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
 
     // Handle real-time blood request
     socket.on('create-request', async (requestData) => {
-      console.log('New blood request received:', requestData);
+      console.log('🆕 New blood request received:', requestData);
       
       try {
         // Save to database
@@ -108,7 +108,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
         });
 
       } catch (error) {
-        console.error('Error creating request:', error);
+        console.error('❌ Error creating request:', error);
         socket.emit('request-error', { 
           message: 'Failed to create blood request' 
         });
@@ -121,7 +121,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       const donorId = socket.user?.id;
       const responseId = uuidv4();
       
-      console.log(`Donor ${donorId} responded to request ${requestId}`);
+      console.log(`🩸 Donor ${donorId} responded to request ${requestId}`);
       
       try {
         // Check if request exists and is active
@@ -161,149 +161,11 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
         });
 
       } catch (error) {
-        console.error('Error handling donor response:', error);
+        console.error('❌ Error handling donor response:', error);
         socket.emit('response-error', { 
           message: 'Failed to send response' 
         });
       }
-    });
-
-    // CHAT HANDLERS 
-
-    // Join conversation room
-    socket.on('join-conversation', async (data: {
-      conversationId: string;
-      userId: string;
-      requestId: string;
-    }) => {
-      const { conversationId, userId, requestId } = data;
-      
-      if (socket.user?.id !== userId) {
-        socket.emit('join-error', { error: 'Unauthorized join attempt' });
-        return;
-      }
-
-      try {
-        // Join the room
-        await socket.join(conversationId);
-        console.log(`User ${userId} joined conversation ${conversationId}`);
-        
-        // Load chat history from database
-        const chatHistory = await getChatHistory(conversationId);
-        socket.emit('chat-history', chatHistory);
-        
-        // Confirm join
-        socket.emit('conversation-joined', {
-          conversationId,
-          requestId,
-          userId
-        });
-        
-        // Notify others in the room
-        socket.to(conversationId).emit('user-joined', {
-          userId,
-          userName: socket.user?.email.split('@')[0],
-          timestamp: new Date().toISOString()
-        });
-        
-      } catch (error) {
-        console.error('Error joining conversation:', error);
-        socket.emit('join-error', { error: 'Failed to join conversation' });
-      }
-    });
-
-    // Handle sending messages
-    socket.on('send-message', async (messageData: {
-      conversationId: string;
-      message: string;
-      senderId: string;
-      senderType: 'donor' | 'requester';
-      requestId: string;
-      timestamp: string;
-    }) => {
-      const { conversationId, message, senderId, senderType, requestId, timestamp } = messageData;
-      const messageId = uuidv4();
-       
-      if (socket.user?.id !== senderId) {
-        socket.emit('message-error', { error: 'Unauthorized message send attempt' });
-        return;
-      }
-
-      try {
-        // Save message to database
-        const savedMessage = await saveMessage({
-          id: messageId,
-          conversationId,
-          text: message,
-          senderId: senderId,
-          senderType,
-          requestId: requestId,
-          timestamp: new Date(timestamp)
-        });
-        
-        // Broadcast to all in the conversation room
-        io.to(conversationId).emit('new-message', {
-          messageId: savedMessage.id,
-          conversationId,
-          message: savedMessage.text,
-          senderId: savedMessage.sender_id,
-          senderType: savedMessage.sender_type,
-          requestId: savedMessage.request_id,
-          timestamp: savedMessage.timestamp,
-          read: savedMessage.read_status
-        });
-        
-        console.log(`Message sent in ${conversationId} by ${senderId}`);
-        
-      } catch (error) {
-        console.error('Error sending message:', error);
-        socket.emit('message-error', { error: 'Failed to send message' });
-      }
-    });
-
-    // Handle marking messages as read
-    socket.on('mark-messages-read', async (data: { messageIds: string[] }) => {
-      const { messageIds } = data;
-      
-      try {
-        await markMessagesAsRead(messageIds);
-        
-        // Notify other participants in the conversation
-        const conversations = await getConversationsForMessages(messageIds);
-        conversations.forEach(conversationId => {
-          socket.to(conversationId).emit('messages-read', { messageIds });
-        });
-        
-      } catch (error) {
-        console.error('Error marking messages as read:', error);
-      }
-    });
-
-    // Handle typing indicators
-    socket.on('typing-start', (data: { conversationId: string; userId: string }) => {
-      
-      if (socket.user?.id !== data.userId) {
-        return;
-      }
-      
-      socket.to(data.conversationId).emit('user-typing', {
-        userId: data.userId,
-        userName: socket.user?.email.split('@')[0],
-        isTyping: true
-      });
-    });
-
-    socket.on('typing-stop', (data: { conversationId: string; userId: string }) => {
-      
-      if (socket.user?.id !== data.userId) {
-        return;
-      }
-      
-      socket.to(data.conversationId).emit('user-typing', {
-        userId: data.userId,
-        userName: socket.user?.email.split('@')[0],
-        isTyping: false
-      });
     });
 
     // Handle location updates
@@ -311,7 +173,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       const { latitude, longitude } = locationData;
       const userId = socket.user?.id;
       
-      console.log(`Location update from user ${userId}`);
+      console.log(`📍 Location update from user ${userId}`);
       
       try {
         await pool.query(
@@ -329,7 +191,89 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
         });
 
       } catch (error) {
-        console.error('Error updating location:', error);
+        console.error('❌ Error updating location:', error);
+      }
+    });
+
+    // Handle request status updates
+    socket.on('update-request-status', async (data: { requestId: string; status: string }) => {
+      const { requestId, status } = data;
+      const userId = socket.user?.id;
+
+      try {
+        // Verify user owns the request
+        const requestCheck = await pool.query(
+          'SELECT id FROM blood_requests WHERE id = $1 AND requester_id = $2',
+          [requestId, userId]
+        );
+
+        if (requestCheck.rows.length === 0) {
+          socket.emit('status-update-error', { message: 'Request not found or unauthorized' });
+          return;
+        }
+
+        // Update request status
+        await pool.query(
+          'UPDATE blood_requests SET status = $1, updated_at = NOW() WHERE id = $2',
+          [status, requestId]
+        );
+
+        // Notify all interested parties
+        io.emit('request-status-updated', {
+          requestId,
+          status,
+          updatedBy: userId,
+          timestamp: new Date().toISOString()
+        });
+
+        socket.emit('status-update-success', {
+          message: 'Request status updated successfully'
+        });
+
+      } catch (error) {
+        console.error('❌ Error updating request status:', error);
+        socket.emit('status-update-error', { 
+          message: 'Failed to update request status' 
+        });
+      }
+    });
+
+    // Handle emergency alerts
+    socket.on('emergency-alert', async (emergencyData) => {
+      const { requestId, message } = emergencyData;
+      const userId = socket.user?.id;
+
+      try {
+        // Verify user has access to the request
+        const requestCheck = await pool.query(
+          'SELECT id, patient_name FROM blood_requests WHERE id = $1 AND (requester_id = $2 OR id IN (SELECT request_id FROM donor_responses WHERE donor_id = $2))',
+          [requestId, userId]
+        );
+
+        if (requestCheck.rows.length === 0) {
+          socket.emit('emergency-error', { message: 'Access denied to this request' });
+          return;
+        }
+
+        // Broadcast emergency alert to all connected users in the area
+        io.emit('emergency-alert-received', {
+          requestId,
+          patientName: requestCheck.rows[0].patient_name,
+          message,
+          alertBy: userId,
+          timestamp: new Date().toISOString(),
+          urgent: true
+        });
+
+        socket.emit('emergency-sent', {
+          message: 'Emergency alert sent successfully'
+        });
+
+      } catch (error) {
+        console.error('❌ Error sending emergency alert:', error);
+        socket.emit('emergency-error', { 
+          message: 'Failed to send emergency alert' 
+        });
       }
     });
 
@@ -340,81 +284,9 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
 
     // Error handling
     socket.on('error', (error) => {
-      console.error('Socket error:', error);
+      console.error('❌ Socket error:', error);
     });
   });
 
-  console.log('✅ Socket.io handlers setup complete');
-};
-
-// Database functions for chat
-const getChatHistory = async (conversationId: string): Promise<any[]> => {
-  try {
-    const result = await pool.query(
-      `SELECT 
-        id, conversation_id, text, sender_id, sender_type, request_id,
-        timestamp, read_status, created_at
-       FROM chat_messages 
-       WHERE conversation_id = $1 
-       ORDER BY timestamp ASC
-       LIMIT 100`,
-      [conversationId]
-    );
-    return result.rows;
-  } catch (error) {
-    console.error('Error fetching chat history:', error);
-    return [];
-  }
-};
-
-const saveMessage = async (messageData: any): Promise<any> => {
-  try {
-    const result = await pool.query(
-      `INSERT INTO chat_messages 
-       (id, conversation_id, text, sender_id, sender_type, request_id, timestamp, read_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING *`,
-      [
-        messageData.id,
-        messageData.conversationId,
-        messageData.text,
-        messageData.senderId,
-        messageData.senderType,
-        messageData.requestId,
-        messageData.timestamp,
-        false
-      ]
-    );
-    return result.rows[0];
-  } catch (error) {
-    console.error('Error saving message:', error);
-    throw error;
-  }
-};
-
-const markMessagesAsRead = async (messageIds: string[]): Promise<void> => {
-  try {
-    await pool.query(
-      `UPDATE chat_messages 
-       SET read_status = true, read_at = NOW()
-       WHERE id = ANY($1)`,
-      [messageIds]
-    );
-  } catch (error) {
-    console.error('Error marking messages as read:', error);
-    throw error;
-  }
-};
-
-const getConversationsForMessages = async (messageIds: string[]): Promise<string[]> => {
-  try {
-    const result = await pool.query(
-      'SELECT DISTINCT conversation_id FROM chat_messages WHERE id = ANY($1)',
-      [messageIds]
-    );
-    return result.rows.map(row => row.conversation_id);
-  } catch (error) {
-    console.error('Error getting conversations for messages:', error);
-    return [];
-  }
+  console.log('✅ Main socket handlers setup complete');
 };

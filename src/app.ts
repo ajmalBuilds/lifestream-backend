@@ -15,7 +15,7 @@ import { requestRoutes } from './routes/requests';
 import { chatRoutes } from './routes/chat';
 
 // Import socket handlers
-import { setupSocketHandlers } from './sockets/socketHandlers';
+import { initializeSocketIO } from './sockets';
 
 class App {
   public app: express.Application;
@@ -66,15 +66,6 @@ class App {
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     }));
-
-    // Handle preflight requests - FIXED: Use proper route syntax
-    // this.app.options('*', (req: Request, res: Response) => {
-    //   res.header('Access-Control-Allow-Origin', config.clientUrl);
-    //   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    //   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-    //   res.header('Access-Control-Allow-Credentials', 'true');
-    //   res.status(200).send();
-    // });
   }
 
   private initializeMiddlewares(): void {
@@ -121,18 +112,19 @@ class App {
   }
 
   private initializeSocketHandlers(): void {
-    setupSocketHandlers(this.io);
+    // Initialize all socket handlers (main + chat)
+    initializeSocketIO(this.io);
   }
 
   private initializeErrorHandling(): void {
-    // 404 handler - FIXED: Use proper route syntax
-    // this.app.use('*', (req: Request, res: Response) => {
-    //   res.status(404).json({
-    //     status: 'error',
-    //     message: `Route ${req.originalUrl} not found`,
-    //     method: req.method,
-    //   });
-    // });
+    // 404 handler
+    this.app.use('*', (req: Request, res: Response) => {
+      res.status(404).json({
+        status: 'error',
+        message: `Route ${req.originalUrl} not found`,
+        method: req.method,
+      });
+    });
 
     // Global error handler
     this.app.use((
@@ -212,28 +204,28 @@ class App {
       
       this.server.listen(config.port, () => {
         console.log(`
-🚀 LifeStream Server Started Successfully!
-📍 Port: ${config.port}
-📱 Client URL: ${config.clientUrl}
-🌍 Environment: ${config.nodeEnv}
-🔗 Health Check: http://localhost:${config.port}/health
-⏰ Started at: ${new Date().toISOString()}
+LifeStream Server Started Successfully!
+Port: ${config.port}
+Client URL: ${config.clientUrl}
+Environment: ${config.nodeEnv}
+Health Check: http://localhost:${config.port}/health
+Started at: ${new Date().toISOString()}
         `);
       });
 
       // Handle server errors
       this.server.on('error', (error: NodeJS.ErrnoException) => {
         if (error.code === 'EADDRINUSE') {
-          console.error(`❌ Port ${config.port} is already in use`);
+          console.error(`Port ${config.port} is already in use`);
           process.exit(1);
         } else {
-          console.error('❌ Server error:', error);
+          console.error('Server error:', error);
           process.exit(1);
         }
       });
 
     } catch (error) {
-      console.error('❌ Failed to start server:', error);
+      console.error('Failed to start server:', error);
       process.exit(1);
     }
   }
@@ -242,27 +234,27 @@ class App {
     return new Promise((resolve, reject) => {
       // Close Socket.IO
       this.io.close(() => {
-        console.log('✅ Socket.IO server closed');
+        console.log('Socket.IO server closed');
       });
 
       // Close HTTP server
       this.server.close((err) => {
         if (err) {
-          console.error('❌ Error closing HTTP server:', err);
+          console.error('Error closing HTTP server:', err);
           reject(err);
           return;
         }
-        console.log('✅ HTTP server closed');
+        console.log('HTTP server closed');
       });
 
       // Close database pool
       pool.end()
         .then(() => {
-          console.log('✅ Database connection pool closed');
+          console.log('Database connection pool closed');
           resolve();
         })
         .catch((error) => {
-          console.error('❌ Error closing database pool:', error);
+          console.error('Error closing database pool:', error);
           reject(error);
         });
     });

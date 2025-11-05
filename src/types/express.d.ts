@@ -1,20 +1,16 @@
 import { Request } from 'express';
+import { JwtPayload } from 'jsonwebtoken';
 
-export interface AuthToken {
+export interface AuthenticatedRequest extends Request {
+  user?: {
+    id: string;
+    email: string;
+    userType: string;
+  };
+}
+
+export interface JwtUserPayload extends JwtPayload {
   id: string;
   email: string;
   userType: string;
-}
-
-export interface AuthenticatedRequest extends Request {
-  user?: AuthToken;
-}
-
-// Extend the Express Request interface globally
-declare global {
-  namespace Express {
-    interface Request {
-      user?: AuthToken;
-    }
-  }
 }

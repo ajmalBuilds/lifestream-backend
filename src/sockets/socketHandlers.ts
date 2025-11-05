@@ -1,11 +1,13 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
-import { pool } from '../config/database';
 import jwt from 'jsonwebtoken';
+import { v4 as uuidv4 } from 'uuid';
+import { pool } from '../config/database';
 import { config } from '../config/env';
+import { JwtUserPayload } from '../types/express';
 
 interface AuthenticatedSocket extends Socket {
   user?: {
-    id: number; // Changed to number to match database
+    id: string;
     email: string;
     userType: string;
   };
@@ -21,7 +23,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
         return next(new Error('Authentication error: No token provided'));
       }
 
-      const decoded = jwt.verify(token, config.jwtSecret) as any;
+      const decoded = jwt.verify(token, config.jwtSecret) as JwtUserPayload;
       
       // Verify user exists in database
       const userResult = await pool.query(
@@ -34,7 +36,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       }
 
       socket.user = {
-        id: userResult.rows[0].id, // This will be integer
+        id: userResult.rows[0].id,
         email: userResult.rows[0].email,
         userType: userResult.rows[0].user_type
       };
@@ -45,8 +47,8 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
   });
 
   io.on('connection', (socket: AuthenticatedSocket) => {
-    console.log('🔌 New client connected:', socket.id, 'User:', socket.user?.email);
-    console.log('📡 Total connected clients:', io.engine.clientsCount);
+    console.log('New client connected:', socket.id, 'User:', socket.user?.email);
+    console.log('Total connected clients:', io.engine.clientsCount);
 
     // Send welcome message
     socket.emit('welcome', { 
@@ -57,8 +59,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
 
     // Join user to their personal room
     socket.on('join-user', (userId: string) => {
-      const userIdNum = parseInt(userId);
-      if (socket.user?.id !== userIdNum) {
+      if (socket.user?.id !== userId) {
         socket.emit('error', { message: 'Unauthorized user join attempt' });
         return;
       }
@@ -73,17 +74,18 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
 
     // Handle real-time blood request
     socket.on('create-request', async (requestData) => {
-      console.log('🆕 New blood request received:', requestData);
+      console.log('New blood request received:', requestData);
       
       try {
         // Save to database
+        const requestId = uuidv4();
         const result = await pool.query(
           `INSERT INTO blood_requests 
-           (requester_id, patient_name, blood_type, units_needed, hospital, urgency, location, additional_notes, status)
-           VALUES ($1, $2, $3, $4, $5, $6, ST_SetSRID(ST_MakePoint($7, $8), 4326), $9, 'active')
+           (id, requester_id, patient_name, blood_type, units_needed, hospital, urgency, location, additional_notes, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, ST_SetSRID(ST_MakePoint($8, $9), 4326), $10, 'active')
            RETURNING *`,
           [
-            socket.user?.id, requestData.patientName, requestData.bloodType, 
+            requestId, socket.user?.id, requestData.patientName, requestData.bloodType, 
             requestData.unitsNeeded, requestData.hospital, requestData.urgency,
             requestData.location.longitude, requestData.location.latitude, 
             requestData.additionalNotes
@@ -117,6 +119,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
     socket.on('donor-response', async (responseData) => {
       const { requestId, message, availability } = responseData;
       const donorId = socket.user?.id;
+      const responseId = uuidv4();
       
       console.log(`Donor ${donorId} responded to request ${requestId}`);
       
@@ -136,10 +139,10 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
 
         // Save response to database
         const result = await pool.query(
-          `INSERT INTO donor_responses (request_id, donor_id, message, availability, status)
-           VALUES ($1, $2, $3, $4, 'pending')
+          `INSERT INTO donor_responses (id, request_id, donor_id, message, availability, status)
+           VALUES ($1, $2, $3, $4, $5, 'pending')
            RETURNING *`,
-          [requestId, donorId, message, availability]
+          [responseId, requestId, donorId, message, availability]
         );
 
         // Notify the requester
@@ -165,7 +168,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       }
     });
 
-    // ==================== CHAT HANDLERS ====================
+    // CHAT HANDLERS 
 
     // Join conversation room
     socket.on('join-conversation', async (data: {
@@ -174,9 +177,8 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       requestId: string;
     }) => {
       const { conversationId, userId, requestId } = data;
-      const userIdNum = parseInt(userId);
       
-      if (socket.user?.id !== userIdNum) {
+      if (socket.user?.id !== userId) {
         socket.emit('join-error', { error: 'Unauthorized join attempt' });
         return;
       }
@@ -220,9 +222,9 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       timestamp: string;
     }) => {
       const { conversationId, message, senderId, senderType, requestId, timestamp } = messageData;
-      const senderIdNum = parseInt(senderId);
-      
-      if (socket.user?.id !== senderIdNum) {
+      const messageId = uuidv4();
+       
+      if (socket.user?.id !== senderId) {
         socket.emit('message-error', { error: 'Unauthorized message send attempt' });
         return;
       }
@@ -230,11 +232,12 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       try {
         // Save message to database
         const savedMessage = await saveMessage({
+          id: messageId,
           conversationId,
           text: message,
-          senderId: senderIdNum,
+          senderId: senderId,
           senderType,
-          requestId: parseInt(requestId),
+          requestId: requestId,
           timestamp: new Date(timestamp)
         });
         
@@ -243,14 +246,14 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
           messageId: savedMessage.id,
           conversationId,
           message: savedMessage.text,
-          senderId: savedMessage.sender_id, // Use database column name
-          senderType: savedMessage.sender_type, // Use database column name
-          requestId: savedMessage.request_id, // Use database column name
+          senderId: savedMessage.sender_id,
+          senderType: savedMessage.sender_type,
+          requestId: savedMessage.request_id,
           timestamp: savedMessage.timestamp,
           read: savedMessage.read_status
         });
         
-        console.log(`💬 Message sent in ${conversationId} by ${senderId}`);
+        console.log(`Message sent in ${conversationId} by ${senderId}`);
         
       } catch (error) {
         console.error('Error sending message:', error);
@@ -278,8 +281,8 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
 
     // Handle typing indicators
     socket.on('typing-start', (data: { conversationId: string; userId: string }) => {
-      const userIdNum = parseInt(data.userId);
-      if (socket.user?.id !== userIdNum) {
+      
+      if (socket.user?.id !== data.userId) {
         return;
       }
       
@@ -291,8 +294,8 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
     });
 
     socket.on('typing-stop', (data: { conversationId: string; userId: string }) => {
-      const userIdNum = parseInt(data.userId);
-      if (socket.user?.id !== userIdNum) {
+      
+      if (socket.user?.id !== data.userId) {
         return;
       }
       
@@ -368,10 +371,11 @@ const saveMessage = async (messageData: any): Promise<any> => {
   try {
     const result = await pool.query(
       `INSERT INTO chat_messages 
-       (conversation_id, text, sender_id, sender_type, request_id, timestamp, read_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (id, conversation_id, text, sender_id, sender_type, request_id, timestamp, read_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
       [
+        messageData.id,
         messageData.conversationId,
         messageData.text,
         messageData.senderId,

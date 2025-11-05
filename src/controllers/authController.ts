@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { v4 as uuidv4 } from 'uuid';
 import { pool } from '../config/database';
 import { config } from '../config/env';
 import { AuthenticatedRequest } from '../types/express';
@@ -15,6 +16,10 @@ interface RegisterRequest {
   phone: string;
   dateOfBirth?: string;
   gender?: string;
+  location?: {
+    latitude: number;
+    longitude: number;
+  };
 }
 
 interface LoginRequest {
@@ -22,10 +27,16 @@ interface LoginRequest {
   password: string;
 }
 
-interface AuthToken {
-  id: string;
-  email: string;
-  userType: string;
+interface UpdateProfileRequest {
+  name?: string;
+  phone?: string;
+  dateOfBirth?: string;
+  gender?: string;
+  bloodType?: string;
+  location?: {
+    latitude: number;
+    longitude: number;
+  };
 }
 
 export const authController = {
@@ -40,7 +51,8 @@ export const authController = {
         userType,
         phone,
         dateOfBirth,
-        gender
+        gender,
+        location
       } = req.body;
 
       // Validation
@@ -60,10 +72,18 @@ export const authController = {
         return;
       }
 
+      if (!['donor', 'recipient', 'both'].includes(userType)) {
+        res.status(400).json({
+          status: 'error',
+          message: 'User type must be donor, recipient, or both',
+        });
+        return;
+      }
+
       // Check if user already exists
       const existingUser = await pool.query(
         'SELECT id FROM users WHERE email = $1',
-        [email]
+        [email.toLowerCase()]
       );
 
       if (existingUser.rows.length > 0) {
@@ -75,38 +95,57 @@ export const authController = {
       }
 
       // Hash password
-      const saltRounds = 12;
-      const hashedPassword = await bcrypt.hash(password, saltRounds);
+      const hashedPassword = await bcrypt.hash(password, config.bcryptRounds);
+      const userId = uuidv4();
+      console.log("UserId: ",userId);
+
+      console.log('Creating user with ID:', userId);
+
+      // Prepare location if provided
+      let locationQuery = '';
+      let locationParams: any[] = [];
+      
+      if (location && location.latitude && location.longitude) {
+        locationQuery = ', location = ST_SetSRID(ST_MakePoint($11, $12), 4326)';
+        locationParams = [location.longitude, location.latitude];
+      }
 
       // Create user
-      const result = await pool.query(
-        `INSERT INTO users 
-         (name, email, password, blood_type, user_type, phone, date_of_birth, gender, is_verified)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING id, name, email, blood_type, user_type, phone, is_verified, created_at`,
-        [
-          name,
-          email,
-          hashedPassword,
-          bloodType,
-          userType,
-          phone,
-          dateOfBirth || null,
-          gender || null,
-          false // Start as unverified
-        ]
-      );
+      const query = `
+        INSERT INTO users 
+        (id, name, email, password, blood_type, user_type, phone, date_of_birth, gender, is_verified${locationQuery})
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10${locationQuery ? ', $11, $12' : ''})
+        RETURNING 
+          id, name, email, blood_type, user_type, phone, 
+          date_of_birth, gender, is_verified, created_at,
+          ST_X(location::geometry) as longitude, 
+          ST_Y(location::geometry) as latitude
+      `;
 
+      const params = [
+        userId,
+        name.trim(),
+        email.toLowerCase().trim(),
+        hashedPassword,
+        bloodType,
+        userType,
+        phone.trim(),
+        dateOfBirth || null,
+        gender || null,
+        false,
+        ...locationParams
+      ];
+
+      const result = await pool.query(query, params);
       const user = result.rows[0];
 
-      // Generate JWT token with proper typing
+      // Generate JWT token
       const tokenPayload = {
         id: user.id,
         email: user.email,
         userType: user.user_type
       };
 
-      // FIX: Use type assertion for expiresIn
       const token = jwt.sign(
         tokenPayload,
         config.jwtSecret,
@@ -124,16 +163,34 @@ export const authController = {
             bloodType: user.blood_type,
             userType: user.user_type,
             phone: user.phone,
-            isVerified: user.is_verified
+            dateOfBirth: user.date_of_birth,
+            gender: user.gender,
+            isVerified: user.is_verified,
+            location: user.longitude && user.latitude ? {
+              longitude: user.longitude,
+              latitude: user.latitude
+            } : undefined,
+            createdAt: user.created_at
           },
           token
         },
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Registration error:', error);
+      
+      // Handle specific database errors
+      if (error.code === '22P02') {
+        res.status(500).json({
+          status: 'error',
+          message: 'Database schema mismatch. Please check if UUID extension is enabled.',
+        });
+        return;
+      }
+
       res.status(500).json({
         status: 'error',
         message: 'Registration failed. Please try again.',
+        ...(config.nodeEnv === 'development' && { details: error.message })
       });
     }
   },
@@ -143,7 +200,6 @@ export const authController = {
     try {
       const { email, password } = req.body;
 
-      // Validation
       if (!email || !password) {
         res.status(400).json({
           status: 'error',
@@ -152,14 +208,16 @@ export const authController = {
         return;
       }
 
-      // Find user
+      // Find user with location
       const result = await pool.query(
         `SELECT 
           id, name, email, password, blood_type, user_type, 
-          phone, is_verified, created_at
+          phone, date_of_birth, gender, is_verified, created_at,
+          ST_X(location::geometry) as longitude, 
+          ST_Y(location::geometry) as latitude
          FROM users 
          WHERE email = $1`,
-        [email]
+        [email.toLowerCase()]
       );
 
       if (result.rows.length === 0) {
@@ -182,14 +240,13 @@ export const authController = {
         return;
       }
 
-      // Generate JWT token with proper typing
+      // Generate JWT token
       const tokenPayload = {
         id: user.id,
         email: user.email,
         userType: user.user_type
       };
 
-      // FIX: Use type assertion for expiresIn
       const token = jwt.sign(
         tokenPayload,
         config.jwtSecret,
@@ -207,7 +264,13 @@ export const authController = {
             bloodType: user.blood_type,
             userType: user.user_type,
             phone: user.phone,
+            dateOfBirth: user.date_of_birth,
+            gender: user.gender,
             isVerified: user.is_verified,
+            location: user.longitude && user.latitude ? {
+              longitude: user.longitude,
+              latitude: user.latitude
+            } : undefined,
             createdAt: user.created_at
           },
           token
@@ -238,21 +301,49 @@ export const authController = {
       // Verify the token
       const decoded = jwt.verify(token, config.jwtSecret) as { userId: string };
       
-      await pool.query(
-        'UPDATE users SET is_verified = true WHERE id = $1',
+      const result = await pool.query(
+        'UPDATE users SET is_verified = true, updated_at = NOW() WHERE id = $1 RETURNING id, email',
         [decoded.userId]
       );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({
+          status: 'error',
+          message: 'User not found',
+        });
+        return;
+      }
 
       res.status(200).json({
         status: 'success',
         message: 'Email verified successfully',
+        data: {
+          user: {
+            id: result.rows[0].id,
+            email: result.rows[0].email,
+            isVerified: true
+          }
+        }
       });
     } catch (error) {
       console.error('Email verification error:', error);
-      res.status(400).json({
-        status: 'error',
-        message: 'Invalid or expired verification token',
-      });
+      
+      if (error instanceof jwt.JsonWebTokenError) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid verification token',
+        });
+      } else if (error instanceof jwt.TokenExpiredError) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Verification token expired',
+        });
+      } else {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid or expired verification token',
+        });
+      }
     }
   },
 
@@ -271,42 +362,45 @@ export const authController = {
 
       // Check if user exists
       const result = await pool.query(
-        'SELECT id FROM users WHERE email = $1',
-        [email]
+        'SELECT id, name FROM users WHERE email = $1',
+        [email.toLowerCase()]
       );
 
-      if (result.rows.length === 0) {
-        // Don't reveal whether email exists or not
-        res.status(200).json({
-          status: 'success',
-          message: 'If the email exists, a password reset link has been sent',
-        });
-        return;
-      }
-
-      const userId = result.rows[0].id;
-
-      // Generate reset token (valid for 1 hour)
-      const resetTokenPayload = { 
-        userId, 
-        type: 'password_reset' 
+      // Always return success to prevent email enumeration
+      const response: any = {
+        status: 'success',
+        message: 'If an account with that email exists, a password reset link has been sent.',
       };
 
-      const resetToken = jwt.sign(
-        resetTokenPayload,
-        config.jwtSecret,
-        { expiresIn: '1h' as jwt.SignOptions['expiresIn'] }
-      );
+      if (result.rows.length > 0) {
+        const userId = result.rows[0].id;
+        const userName = result.rows[0].name;
 
-      // In a real implementation, you'd send an email with the reset token
-      console.log(`Password reset token for ${email}: ${resetToken}`);
+        // Generate reset token (valid for 1 hour)
+        const resetTokenPayload = { 
+          userId, 
+          type: 'password_reset',
+          email: email.toLowerCase()
+        };
 
-      res.status(200).json({
-        status: 'success',
-        message: 'If the email exists, a password reset link has been sent',
-        // In development, return the token for testing
-        ...(config.nodeEnv === 'development' && { resetToken })
-      });
+        const resetToken = jwt.sign(
+          resetTokenPayload,
+          config.jwtSecret,
+          { expiresIn: '1h' }
+        );
+
+        // In a real implementation, you'd send an email with the reset token
+        console.log(`Password reset token for ${email}: ${resetToken}`);
+        console.log(`Reset link: ${config.clientUrl}/reset-password?token=${resetToken}`);
+
+        // Include token in development for testing
+        if (config.nodeEnv === 'development') {
+          response.resetToken = resetToken;
+          response.resetLink = `${config.clientUrl}/reset-password?token=${resetToken}`;
+        }
+      }
+
+      res.status(200).json(response);
     } catch (error) {
       console.error('Forgot password error:', error);
       res.status(500).json({
@@ -341,6 +435,7 @@ export const authController = {
       const decoded = jwt.verify(token, config.jwtSecret) as { 
         userId: string; 
         type: string;
+        email: string;
       };
 
       if (decoded.type !== 'password_reset') {
@@ -352,14 +447,21 @@ export const authController = {
       }
 
       // Hash new password
-      const saltRounds = 12;
-      const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+      const hashedPassword = await bcrypt.hash(newPassword, config.bcryptRounds);
 
       // Update password
-      await pool.query(
-        'UPDATE users SET password = $1 WHERE id = $2',
+      const result = await pool.query(
+        'UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2 RETURNING id, email',
         [hashedPassword, decoded.userId]
       );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({
+          status: 'error',
+          message: 'User not found',
+        });
+        return;
+      }
 
       res.status(200).json({
         status: 'success',
@@ -367,10 +469,16 @@ export const authController = {
       });
     } catch (error) {
       console.error('Reset password error:', error);
+      
       if (error instanceof jwt.JsonWebTokenError) {
         res.status(400).json({
           status: 'error',
-          message: 'Invalid or expired reset token',
+          message: 'Invalid reset token',
+        });
+      } else if (error instanceof jwt.TokenExpiredError) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Reset token has expired',
         });
       } else {
         res.status(500).json({
@@ -381,7 +489,7 @@ export const authController = {
     }
   },
 
-  // Get current user (for token verification)
+  // Get current user
   getMe: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const userId = req.user?.id;
@@ -397,7 +505,9 @@ export const authController = {
       const result = await pool.query(
         `SELECT 
           id, name, email, blood_type, user_type, phone, 
-          date_of_birth, gender, is_verified, created_at
+          date_of_birth, gender, is_verified, created_at, updated_at,
+          ST_X(location::geometry) as longitude, 
+          ST_Y(location::geometry) as latitude
          FROM users 
          WHERE id = $1`,
         [userId]
@@ -426,7 +536,12 @@ export const authController = {
             dateOfBirth: user.date_of_birth,
             gender: user.gender,
             isVerified: user.is_verified,
-            createdAt: user.created_at
+            location: user.longitude && user.latitude ? {
+              longitude: user.longitude,
+              latitude: user.latitude
+            } : undefined,
+            createdAt: user.created_at,
+            updatedAt: user.updated_at
           }
         },
       });
@@ -443,7 +558,7 @@ export const authController = {
   updateProfile: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const userId = req.user?.id;
-      const { name, phone, dateOfBirth, gender } = req.body;
+      const { name, phone, dateOfBirth, gender, bloodType, location } = req.body;
 
       if (!userId) {
         res.status(401).json({
@@ -453,19 +568,105 @@ export const authController = {
         return;
       }
 
-      const result = await pool.query(
-        `UPDATE users 
-         SET name = $1, phone = $2, date_of_birth = $3, gender = $4, updated_at = NOW()
-         WHERE id = $5
-         RETURNING id, name, email, phone, date_of_birth, gender, is_verified`,
-        [name, phone, dateOfBirth, gender, userId]
-      );
+      // Build dynamic update query
+      const updates: string[] = [];
+      const params: any[] = [];
+      let paramCount = 0;
+
+      if (name !== undefined) {
+        paramCount++;
+        updates.push(`name = $${paramCount}`);
+        params.push(name.trim());
+      }
+
+      if (phone !== undefined) {
+        paramCount++;
+        updates.push(`phone = $${paramCount}`);
+        params.push(phone.trim());
+      }
+
+      if (dateOfBirth !== undefined) {
+        paramCount++;
+        updates.push(`date_of_birth = $${paramCount}`);
+        params.push(dateOfBirth);
+      }
+
+      if (gender !== undefined) {
+        paramCount++;
+        updates.push(`gender = $${paramCount}`);
+        params.push(gender);
+      }
+
+      if (bloodType !== undefined) {
+        paramCount++;
+        updates.push(`blood_type = $${paramCount}`);
+        params.push(bloodType);
+      }
+
+      if (location && location.latitude && location.longitude) {
+        paramCount++;
+        updates.push(`location = ST_SetSRID(ST_MakePoint($${paramCount}, $${paramCount + 1}), 4326)`);
+        params.push(location.longitude, location.latitude);
+        paramCount++;
+      }
+
+      if (updates.length === 0) {
+        res.status(400).json({
+          status: 'error',
+          message: 'No fields to update',
+        });
+        return;
+      }
+
+      updates.push('updated_at = NOW()');
+      
+      paramCount++;
+      params.push(userId);
+
+      const query = `
+        UPDATE users 
+        SET ${updates.join(', ')}
+        WHERE id = $${paramCount}
+        RETURNING 
+          id, name, email, blood_type, user_type, phone, 
+          date_of_birth, gender, is_verified, created_at, updated_at,
+          ST_X(location::geometry) as longitude, 
+          ST_Y(location::geometry) as latitude
+      `;
+
+      const result = await pool.query(query, params);
+
+      if (result.rows.length === 0) {
+        res.status(404).json({
+          status: 'error',
+          message: 'User not found',
+        });
+        return;
+      }
+
+      const user = result.rows[0];
 
       res.status(200).json({
         status: 'success',
         message: 'Profile updated successfully',
         data: {
-          user: result.rows[0],
+          user: {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            bloodType: user.blood_type,
+            userType: user.user_type,
+            phone: user.phone,
+            dateOfBirth: user.date_of_birth,
+            gender: user.gender,
+            isVerified: user.is_verified,
+            location: user.longitude && user.latitude ? {
+              longitude: user.longitude,
+              latitude: user.latitude
+            } : undefined,
+            createdAt: user.created_at,
+            updatedAt: user.updated_at
+          }
         },
       });
     } catch (error) {

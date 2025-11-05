@@ -1,16 +1,7 @@
-import { Request, Response, NextFunction } from 'express';
+import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config/env';
-
-interface AuthToken {
-  id: string;
-  email: string;
-  userType: string;
-}
-
-export interface AuthenticatedRequest extends Request {
-  user?: AuthToken;
-}
+import { AuthenticatedRequest, JwtUserPayload } from '../types/express';
 
 export const authMiddleware = (
   req: AuthenticatedRequest,
@@ -18,23 +9,31 @@ export const authMiddleware = (
   next: NextFunction
 ): void => {
   try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-
-    if (!token) {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
       res.status(401).json({
         status: 'error',
-        message: 'Access denied. No token provided.',
+        message: 'Access token required',
       });
       return;
     }
 
-    const decoded = jwt.verify(token, config.jwtSecret) as AuthToken;
-    req.user = decoded;
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, config.jwtSecret) as JwtUserPayload;
+
+    req.user = {
+      id: decoded.id,
+      email: decoded.email,
+      userType: decoded.userType,
+    };
+
     next();
   } catch (error) {
+    console.error('Auth middleware error:', error);
     res.status(401).json({
       status: 'error',
-      message: 'Invalid token.',
+      message: 'Invalid or expired token',
     });
   }
 };

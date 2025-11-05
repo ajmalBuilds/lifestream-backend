@@ -52,16 +52,55 @@ export const userController = {
   updateProfile: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const userId = req.user?.id;
-      const { name, phone, dateOfBirth, gender, bloodType } = req.body;
-
-      const result = await pool.query(
-        `UPDATE users 
-         SET name = $1, phone = $2, date_of_birth = $3, gender = $4, blood_type = $5, updated_at = NOW()
-         WHERE id = $6
-         RETURNING id, name, email, blood_type, phone, date_of_birth, gender, is_verified`,
-        [name, phone, dateOfBirth, gender, bloodType, userId]
+      const { name, phone, dateOfBirth, gender, bloodType, location } = req.body;
+  
+      if (!userId) {
+        res.status(401).json({
+          status: 'error',
+          message: 'Not authenticated',
+        });
+        return;
+      }
+  
+      // First, get the current user to preserve existing blood_type if not provided
+      const currentUser = await pool.query(
+        'SELECT blood_type FROM users WHERE id = $1',
+        [userId]
       );
-
+  
+      if (currentUser.rows.length === 0) {
+        res.status(404).json({
+          status: 'error',
+          message: 'User not found',
+        });
+        return;
+      }
+  
+      const currentBloodType = currentUser.rows[0].blood_type;
+  
+      // Use provided bloodType or keep the current one
+      const finalBloodType = bloodType !== undefined && bloodType !== null ? bloodType : currentBloodType;
+  
+      // Build the update query dynamically to handle location
+      let query = `
+        UPDATE users 
+        SET name = $1, phone = $2, date_of_birth = $3, gender = $4, blood_type = $5, updated_at = NOW()
+      `;
+      
+      const params: any[] = [name, phone, dateOfBirth, gender, finalBloodType];
+      let paramCount = 5;
+  
+      // Add location update if provided
+      if (location && location.latitude && location.longitude) {
+        query += `, location = ST_SetSRID(ST_MakePoint($${++paramCount}, $${++paramCount}), 4326)`;
+        params.push(location.longitude, location.latitude);
+      }
+  
+      query += ` WHERE id = $${++paramCount} RETURNING id, name, email, blood_type, phone, date_of_birth, gender, is_verified`;
+      params.push(userId);
+  
+      const result = await pool.query(query, params);
+  
       res.status(200).json({
         status: 'success',
         message: 'Profile updated successfully',

@@ -1,19 +1,14 @@
 import { Request, Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
 import { pool } from '../config/database';
-
-interface AuthenticatedRequest extends Request {
-  user?: {
-    id: string;
-    email: string;
-    userType: string;
-  };
-}
+import { AuthenticatedRequest } from '../types/express';
 
 export const requestController = {
   // Create blood request
   createRequest: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const userId = req.user?.id;
+      const requestId = uuidv4();
       const {
         patientName,
         bloodType,
@@ -34,11 +29,11 @@ export const requestController = {
 
       const result = await pool.query(
         `INSERT INTO blood_requests 
-         (requester_id, patient_name, blood_type, units_needed, hospital, urgency, location, additional_notes, status)
-         VALUES ($1, $2, $3, $4, $5, $6, ST_SetSRID(ST_MakePoint($7, $8), 4326), $9, 'active')
+         (id, requester_id, patient_name, blood_type, units_needed, hospital, urgency, location, additional_notes, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, ST_SetSRID(ST_MakePoint($8, $9), 4326), $10, 'active')
          RETURNING *`,
         [
-          userId, patientName, bloodType, unitsNeeded, hospital, urgency,
+          requestId, userId, patientName, bloodType, unitsNeeded, hospital, urgency,
           location.longitude, location.latitude, additionalNotes
         ]
       );
@@ -439,13 +434,21 @@ export const requestController = {
       const userId = req.user?.id;
       const { requestId } = req.params;
       const { donorId } = req.body;
-
-      // Verify request ownership
+  
+      if (!userId || !donorId) {
+        res.status(400).json({
+          status: 'error',
+          message: 'User ID and donor ID are required',
+        });
+        return;
+      }
+  
+      // Verify request ownership and that it's active
       const requestCheck = await pool.query(
-        'SELECT id FROM blood_requests WHERE id = $1 AND requester_id = $2',
+        'SELECT id, status FROM blood_requests WHERE id = $1 AND requester_id = $2',
         [requestId, userId]
       );
-
+  
       if (requestCheck.rows.length === 0) {
         res.status(404).json({
           status: 'error',
@@ -453,35 +456,77 @@ export const requestController = {
         });
         return;
       }
-
-      // Update donor response status
-      await pool.query(
-        'UPDATE donor_responses SET status = $1 WHERE request_id = $2 AND donor_id = $3',
-        ['accepted', requestId, donorId]
+  
+      if (requestCheck.rows[0].status !== 'active') {
+        res.status(400).json({
+          status: 'error',
+          message: 'Cannot select donor for a completed or cancelled request',
+        });
+        return;
+      }
+  
+      // Verify donor exists and has responded to this request
+      const donorResponseCheck = await pool.query(
+        `SELECT dr.id 
+         FROM donor_responses dr 
+         JOIN users u ON dr.donor_id = u.id 
+         WHERE dr.request_id = $1 AND dr.donor_id = $2 AND dr.status = 'pending'
+         AND u.user_type IN ('donor', 'both')`,
+        [requestId, donorId]
       );
-
-      // Reject other responses
-      await pool.query(
-        'UPDATE donor_responses SET status = $1 WHERE request_id = $2 AND donor_id != $3',
-        ['rejected', requestId, donorId]
-      );
-
-      // Update request status
-      await pool.query(
-        'UPDATE blood_requests SET status = $1, updated_at = NOW() WHERE id = $2',
-        ['fulfilled', requestId]
-      );
-
-      // Create donation record
-      await pool.query(
-        'INSERT INTO donations (request_id, donor_id, status) VALUES ($1, $2, $3)',
-        [requestId, donorId, 'scheduled']
-      );
-
-      res.status(200).json({
-        status: 'success',
-        message: 'Donor selected successfully',
-      });
+  
+      if (donorResponseCheck.rows.length === 0) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid donor or donor has not responded to this request',
+        });
+        return;
+      }
+  
+      // Start transaction for multiple operations
+      const client = await pool.connect();
+      
+      try {
+        await client.query('BEGIN');
+  
+        // Update donor response status
+        await client.query(
+          'UPDATE donor_responses SET status = $1 WHERE request_id = $2 AND donor_id = $3',
+          ['accepted', requestId, donorId]
+        );
+  
+        // Reject other responses
+        await client.query(
+          'UPDATE donor_responses SET status = $1 WHERE request_id = $2 AND donor_id != $3 AND status = $4',
+          ['rejected', requestId, donorId, 'pending']
+        );
+  
+        // Update request status
+        await client.query(
+          'UPDATE blood_requests SET status = $1, updated_at = NOW() WHERE id = $2',
+          ['fulfilled', requestId]
+        );
+  
+        // Create donation record
+        await client.query(
+          'INSERT INTO donations (request_id, donor_id, status) VALUES ($1, $2, $3)',
+          [requestId, donorId, 'scheduled']
+        );
+  
+        await client.query('COMMIT');
+  
+        res.status(200).json({
+          status: 'success',
+          message: 'Donor selected successfully',
+        });
+  
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+  
     } catch (error) {
       console.error('Select donor error:', error);
       res.status(500).json({

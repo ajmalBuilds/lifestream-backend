@@ -9,12 +9,34 @@ app.listen().catch((error) => {
 });
 
 // Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('Shutting down server gracefully...');
-  process.exit(0);
+const gracefulShutdown = (signal: string) => {
+  console.log(`\n📢 Received ${signal}. Shutting down gracefully...`);
+  
+  app.close().then(() => {
+    console.log('✅ All services closed successfully.');
+    process.exit(0);
+  }).catch((error) => {
+    console.error('❌ Error during shutdown:', error);
+    process.exit(1);
+  });
+
+  // Force shutdown after 10 seconds
+  setTimeout(() => {
+    console.log('⚠️ Forcing shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('🚨 Uncaught Exception:', error);
+  process.exit(1);
 });
 
-process.on('SIGTERM', () => {
-  console.log('Server terminated');
-  process.exit(0);
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🚨 Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
 });

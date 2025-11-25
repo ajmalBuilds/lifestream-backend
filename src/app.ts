@@ -8,13 +8,11 @@ import { config } from './config/env';
 import { testConnection, pool } from './config/database';
 import rateLimit from 'express-rate-limit';
 
-// Import routes
 import { authRoutes } from './routes/auth';
 import { userRoutes } from './routes/users';
 import { requestRoutes } from './routes/requests';
 import { chatRoutes } from './routes/chat';
 
-// Import socket handlers
 import { initializeSocketIO } from './sockets';
 
 class App {
@@ -32,7 +30,7 @@ class App {
         credentials: true,
       },
     });
-
+  
     this.initializeSecurity();
     this.initializeMiddlewares();
     this.initializeRoutes();
@@ -75,11 +73,43 @@ class App {
   }
 
   private initializeRoutes(): void {
-    // API Routes
+    console.log('🔄 Initializing routes...');
+    
+    // API Routes - FIXED: Ensure all routes are properly mounted
     this.app.use('/api/auth', authRoutes);
     this.app.use('/api/users', userRoutes);
     this.app.use('/api/requests', requestRoutes);
     this.app.use('/api/chat', chatRoutes);
+
+    // Debug route to check if chat routes are mounted
+    this.app.get('/api/debug-routes', (req: Request, res: Response) => {
+      const routes: any[] = [];
+      this.app._router.stack.forEach((middleware: any) => {
+        if (middleware.route) {
+          routes.push({
+            path: middleware.route.path,
+            methods: Object.keys(middleware.route.methods)
+          });
+        } else if (middleware.name === 'router') {
+          middleware.handle.stack.forEach((handler: any) => {
+            if (handler.route) {
+              routes.push({
+                path: handler.route.path,
+                methods: Object.keys(handler.route.methods)
+              });
+            }
+          });
+        }
+      });
+      
+      res.status(200).json({
+        status: 'success',
+        data: {
+          routes,
+          mountedPaths: ['/api/auth', '/api/users', '/api/requests', '/api/chat']
+        }
+      });
+    });
 
     // Health check route
     this.app.get('/health', (req: Request, res: Response) => {
@@ -117,15 +147,15 @@ class App {
   }
 
   private initializeErrorHandling(): void {
-    // 404 handler
-    this.app.use('*', (req: Request, res: Response) => {
+    this.app.use((req: Request, res: Response) => {
+      console.log(`❌ 404 - Route not found: ${req.method} ${req.originalUrl}`);
       res.status(404).json({
         status: 'error',
         message: `Route ${req.originalUrl} not found`,
         method: req.method,
       });
     });
-
+  
     // Global error handler
     this.app.use((
       error: any,
@@ -133,13 +163,13 @@ class App {
       res: Response,
       next: NextFunction
     ) => {
-      console.error('🚨 Global error handler:', {
+      console.error('Global error handler:', {
         message: error.message,
         stack: error.stack,
         url: req.url,
         method: req.method,
       });
-
+  
       // Handle JWT errors
       if (error.name === 'JsonWebTokenError') {
         res.status(401).json({
@@ -148,7 +178,7 @@ class App {
         });
         return;
       }
-
+  
       if (error.name === 'TokenExpiredError') {
         res.status(401).json({
           status: 'error',
@@ -156,7 +186,7 @@ class App {
         });
         return;
       }
-
+  
       // Handle database errors
       if (error.code === '23505') { // Unique violation
         res.status(409).json({
@@ -165,7 +195,7 @@ class App {
         });
         return;
       }
-
+  
       // Handle Zod validation errors
       if (error.name === 'ZodError') {
         res.status(400).json({
@@ -175,7 +205,7 @@ class App {
         });
         return;
       }
-
+  
       // Handle rate limit errors
       if (error.status === 429) {
         res.status(429).json({
@@ -184,10 +214,10 @@ class App {
         });
         return;
       }
-
+  
       const statusCode = error.status || error.statusCode || 500;
       const message = error.message || 'Internal server error';
-
+  
       res.status(statusCode).json({
         status: 'error',
         message,
@@ -209,6 +239,7 @@ Port: ${config.port}
 Client URL: ${config.clientUrl}
 Environment: ${config.nodeEnv}
 Health Check: http://localhost:${config.port}/health
+Debug Routes: http://localhost:${config.port}/api/debug-routes
 Started at: ${new Date().toISOString()}
         `);
       });

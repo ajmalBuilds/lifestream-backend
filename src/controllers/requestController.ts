@@ -61,7 +61,7 @@ export const requestController = {
   getActiveRequests: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { bloodType, urgency, limit = 20, offset = 0 } = req.query;
-
+      
       let query = `
         SELECT 
           br.*,
@@ -97,7 +97,6 @@ export const requestController = {
           WHEN 'low' THEN 4
         END, br.created_at DESC
         LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
-
       params.push(limit, offset);
 
       const result = await pool.query(query, params);
@@ -123,6 +122,9 @@ export const requestController = {
     try {
       const { latitude, longitude, radius = 10, bloodType } = req.query;
       const userId = req.user?.id;
+      console.log("Latitude : ", latitude);
+      console.log("longitude : ", longitude);
+      console.log("User Id : ", userId);
 
       if (!latitude || !longitude) {
         res.status(400).json({
@@ -160,6 +162,7 @@ export const requestController = {
       const result = await pool.query(query, [
         longitude, latitude, userId, bloodType, radius
       ]);
+      console.log(" results : ",result);
 
       res.status(200).json({
         status: 'success',

@@ -49,73 +49,85 @@ export const userController = {
   },
 
   // Update user profile
-  updateProfile: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-    try {
-      const userId = req.user?.id;
-      const { name, phone, dateOfBirth, gender, bloodType, location } = req.body;
-  
-      if (!userId) {
-        res.status(401).json({
-          status: 'error',
-          message: 'Not authenticated',
-        });
-        return;
-      }
-  
-      // First, get the current user to preserve existing blood_type if not provided
-      const currentUser = await pool.query(
-        'SELECT blood_type FROM users WHERE id = $1',
-        [userId]
-      );
-  
-      if (currentUser.rows.length === 0) {
-        res.status(404).json({
-          status: 'error',
-          message: 'User not found',
-        });
-        return;
-      }
-  
-      const currentBloodType = currentUser.rows[0].blood_type;
-  
-      // Use provided bloodType or keep the current one
-      const finalBloodType = bloodType !== undefined && bloodType !== null ? bloodType : currentBloodType;
-  
-      // Build the update query dynamically to handle location
-      let query = `
-        UPDATE users 
-        SET name = $1, phone = $2, date_of_birth = $3, gender = $4, blood_type = $5, updated_at = NOW()
-      `;
-      
-      const params: any[] = [name, phone, dateOfBirth, gender, finalBloodType];
-      let paramCount = 5;
-  
-      // Add location update if provided
-      if (location && location.latitude && location.longitude) {
-        query += `, location = ST_SetSRID(ST_MakePoint($${++paramCount}, $${++paramCount}), 4326)`;
-        params.push(location.longitude, location.latitude);
-      }
-  
-      query += ` WHERE id = $${++paramCount} RETURNING id, name, email, blood_type, phone, date_of_birth, gender, is_verified`;
-      params.push(userId);
-  
-      const result = await pool.query(query, params);
-  
-      res.status(200).json({
-        status: 'success',
-        message: 'Profile updated successfully',
-        data: {
-          user: result.rows[0],
-        },
-      });
-    } catch (error) {
-      console.error('Update profile error:', error);
-      res.status(500).json({
+updateProfile: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  console.log('=== UPDATE PROFILE CALLED ===');
+  console.log('Request body:', req.body);
+  console.log('User ID:', req.user?.id);
+  try {
+    const userId = req.user?.id;
+    const { name, phone, dateOfBirth, gender, bloodType, location } = req.body;
+    
+    if (!userId) {
+      res.status(401).json({
         status: 'error',
-        message: 'Failed to update profile',
+        message: 'Not authenticated',
       });
+      return;
     }
-  },
+
+    const currentUser = await pool.query(
+      'SELECT * FROM users WHERE id = $1',
+      [userId]
+    );
+    
+    if (currentUser.rows.length === 0) {
+      res.status(404).json({
+        status: 'error',
+        message: 'User not found',
+      });
+      return;
+    }
+
+    const currentBloodType = currentUser.rows[0].blood_type;
+    const finalBloodType = bloodType !== undefined && bloodType !== null ? bloodType : currentBloodType;
+    
+    let query = `
+      UPDATE users 
+      SET name = $1, phone = $2, date_of_birth = $3, gender = $4, blood_type = $5, updated_at = NOW()
+    `;
+    
+    const params: any[] = [
+      name,
+      phone,
+      dateOfBirth,
+      gender,
+      finalBloodType
+    ];
+    let paramCount = 5;
+
+    if (location && location.latitude !== undefined && location.longitude !== undefined) {
+      query += `, location = ST_SetSRID(ST_MakePoint($${++paramCount}, $${++paramCount}), 4326)`;
+      params.push(location.longitude, location.latitude);
+    }
+
+    query += ` WHERE id = $${++paramCount} 
+              RETURNING 
+                id, name, email, blood_type, phone, 
+                ST_X(location::geometry) as longitude, 
+                ST_Y(location::geometry) as latitude,
+                date_of_birth, gender, is_verified, created_at, updated_at`;
+    params.push(userId);
+
+    console.log("Query : ", query);
+    console.log("Params :", params);
+    
+    const result = await pool.query(query, params);
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Profile updated successfully',
+      data: {
+        user: result.rows[0],
+      },
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update profile',
+    });
+  }
+},
 
   // Get donation history
   getDonationHistory: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -153,8 +165,9 @@ export const userController = {
   // Get nearby donors
   getNearbyDonors: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-      const { latitude, longitude, radius = 10, bloodType } = req.query;
+      const { latitude, longitude, bloodType } = req.query;
       const userId = req.user?.id;
+      const  radius = 50;
 
       if (!latitude || !longitude) {
         res.status(400).json({

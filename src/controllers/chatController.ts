@@ -12,32 +12,28 @@ interface MarkMessagesReadRequest {
   messageIds: string[];
 }
 
-interface JoinConversationRequest {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-}
-
-interface SocketMessageData {
-  conversationId: string;
-  message: string;
-  senderId: string;
-  senderType: string;
-  requestId: string;
-  timestamp: string;
-}
-
 export const chatController = {
   // Get conversation by request ID
   getConversationByRequestId: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { requestId } = req.params;
       const userId = req.user?.id;
+      
+      console.log("Request ID:", requestId);
+      console.log("User ID:", userId);
 
       if (!userId) {
         res.status(401).json({
           status: 'error',
           message: 'Not authenticated'
+        });
+        return;
+      }
+
+      if (!requestId) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Request ID is required'
         });
         return;
       }
@@ -158,6 +154,14 @@ export const chatController = {
         return;
       }
 
+      if (typeof text !== 'string' || text.trim().length === 0) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Text message cannot be empty'
+        });
+        return;
+      }
+
       // Verify user has access to this conversation
       const accessCheck = await pool.query(
         `SELECT br.id 
@@ -255,16 +259,29 @@ export const chatController = {
         return;
       }
 
+      // Validate message IDs
+      const validMessageIds = messageIds.filter(id => 
+        typeof id === 'string' && id.length > 0
+      );
+
+      if (validMessageIds.length === 0) {
+        res.status(400).json({
+          status: 'error',
+          message: 'No valid message IDs provided'
+        });
+        return;
+      }
+
       // Verify user has access to these messages
       const accessCheck = await pool.query(
         `SELECT cm.id 
          FROM chat_messages cm
          JOIN blood_requests br ON cm.request_id = br.id
          WHERE cm.id = ANY($1) AND (br.requester_id = $2 OR cm.sender_id = $2)`,
-        [messageIds, userId]
+        [validMessageIds, userId]
       );
 
-      if (accessCheck.rows.length !== messageIds.length) {
+      if (accessCheck.rows.length !== validMessageIds.length) {
         res.status(403).json({
           status: 'error',
           message: 'Access denied to some messages'
@@ -278,7 +295,7 @@ export const chatController = {
          SET read_status = true, read_at = NOW()
          WHERE id = ANY($1)
          RETURNING id`,
-        [messageIds]
+        [validMessageIds]
       );
 
       res.status(200).json({
@@ -350,8 +367,8 @@ export const chatController = {
         urgency: conv.urgency,
         requestStatus: conv.request_status,
         requesterName: conv.requester_name,
-        messageCount: parseInt(conv.message_count),
-        unreadCount: parseInt(conv.unread_count),
+        messageCount: parseInt(conv.message_count) || 0,
+        unreadCount: parseInt(conv.unread_count) || 0,
         lastMessageTime: conv.last_message_time,
         lastMessageText: conv.last_message_text
       }));
@@ -398,7 +415,7 @@ export const chatController = {
         [userId]
       );
 
-      const unreadCount = parseInt(result.rows[0].unread_count);
+      const unreadCount = parseInt(result.rows[0]?.unread_count) || 0;
 
       res.status(200).json({
         status: 'success',
@@ -426,6 +443,14 @@ export const chatController = {
         res.status(401).json({
           status: 'error',
           message: 'Not authenticated'
+        });
+        return;
+      }
+
+      if (!requestId) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Request ID is required'
         });
         return;
       }
@@ -490,10 +515,18 @@ export const chatController = {
         return;
       }
 
-      if (!query || typeof query !== 'string') {
+      if (!requestId) {
         res.status(400).json({
           status: 'error',
-          message: 'Search query is required'
+          message: 'Request ID is required'
+        });
+        return;
+      }
+
+      if (!query || typeof query !== 'string' || query.trim().length === 0) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Valid search query is required'
         });
         return;
       }
@@ -534,7 +567,7 @@ export const chatController = {
          WHERE cm.conversation_id = $1 
          AND cm.text ILIKE $2
          ORDER BY cm.timestamp DESC`,
-        [conversationId, `%${query}%`]
+        [conversationId, `%${query.trim()}%`]
       );
 
       const messages = searchResult.rows.map(message => ({

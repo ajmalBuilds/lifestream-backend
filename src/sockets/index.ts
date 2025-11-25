@@ -9,5 +9,5 @@ export const initializeSocketIO = (io: SocketIOServer): void => {
   // Setup chat-specific socket handlers
   setupChatHandlers(io);
   
-  console.log('🚀 All socket handlers initialized successfully');
+  console.log('All socket handlers initialized successfully');
 };

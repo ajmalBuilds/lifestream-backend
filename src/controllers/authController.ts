@@ -109,12 +109,13 @@ export const authController = {
         locationQuery = ', location = ST_SetSRID(ST_MakePoint($11, $12), 4326)';
         locationParams = [location.longitude, location.latitude];
       }
+      console.log("Passes LocationQuesry");
 
       // Create user
       const query = `
         INSERT INTO users 
-        (id, name, email, password, blood_type, user_type, phone, date_of_birth, gender, is_verified${locationQuery})
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10${locationQuery ? ', $11, $12' : ''})
+        (id, name, email, password, blood_type, user_type, phone, date_of_birth, gender, is_verified${location ? ', location' : ''})
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10${location ? ', ST_SetSRID(ST_MakePoint($11, $12), 4326)' : ''})
         RETURNING 
           id, name, email, blood_type, user_type, phone, 
           date_of_birth, gender, is_verified, created_at,
@@ -135,8 +136,9 @@ export const authController = {
         false,
         ...locationParams
       ];
-
+      console.log("Creating...");
       const result = await pool.query(query, params);
+      console.log("results : ",result);
       const user = result.rows[0];
 
       // Generate JWT token

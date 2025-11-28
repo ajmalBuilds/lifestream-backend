@@ -18,6 +18,7 @@ router.delete('/:requestId', requestController.cancelRequest);
 // Donor responses
 router.post('/:requestId/respond', requestController.respondToRequest);
 router.get('/:requestId/responses', requestController.getRequestResponses);
+router.get('/:requestId/existing-response', requestController.existingRespondOnARequest);
 router.post('/:requestId/select-donor', requestController.selectDonor);
 
 // User request history

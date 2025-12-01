@@ -62,10 +62,21 @@ export const setupChatHandlers = (io: SocketIOServer): void => {
       try {
         // Verify user has access to this conversation
         const accessCheck = await pool.query(
-          `SELECT id, requester_id FROM blood_requests 
-           WHERE id = $1 AND (requester_id = $2 OR id IN (
-             SELECT request_id FROM donor_responses WHERE donor_id = $2
-           ))`,
+          `SELECT br.id 
+           FROM blood_requests br
+           WHERE br.id = $1 
+           AND (
+             -- User is the requester (person needing blood)
+             br.requester_id = $2 
+             OR 
+             -- User is a donor who has responded to this request
+             EXISTS (
+               SELECT 1 FROM donor_responses dr 
+               WHERE dr.request_id = br.id 
+               AND dr.donor_id = $2
+               AND dr.status IN ('accepted', 'pending', 'completed')
+             )
+           )`,
           [requestId, userId]
         );
 
@@ -375,7 +386,7 @@ const getChatHistory = async (conversationId: string): Promise<any[]> => {
        LEFT JOIN users u ON cm.sender_id = u.id
        WHERE cm.conversation_id = $1 
        ORDER BY cm.timestamp ASC
-       LIMIT 200`, // Increased limit for better history
+       LIMIT 200`, // Increased limit for better history later
       [conversationId]
     );
     

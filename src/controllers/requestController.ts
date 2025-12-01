@@ -325,6 +325,14 @@ export const requestController = {
       const { requestId } = req.params;
       const { message, availability } = req.body;
 
+      if (!donorId) {
+        res.status(401).json({
+          status: 'error',
+          message: 'Not authenticated',
+        });
+        return;
+      }
+
       // Check if request exists and is active
       const requestCheck = await pool.query(
         'SELECT id FROM blood_requests WHERE id = $1 AND status = $2',
@@ -335,6 +343,15 @@ export const requestController = {
         res.status(404).json({
           status: 'error',
           message: 'Active request not found',
+        });
+        return;
+      }
+
+      // Donor cannot respond to their own request
+      if (requestCheck.rows[0].requester_id === donorId) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Cannot respond to your own request',
         });
         return;
       }
@@ -375,6 +392,49 @@ export const requestController = {
       res.status(500).json({
         status: 'error',
         message: 'Failed to submit response',
+      });
+    }
+  },
+
+  existingRespondOnARequest: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const donorId = req.user?.id;
+      const { requestId } = req.params;
+
+      if (!donorId) {
+        res.status(401).json({
+          status: 'error',
+          message: 'Not authenticated',
+        });
+        return;
+      }
+
+      // Check if already responded
+      const existingResponse = await pool.query(
+        'SELECT id FROM donor_responses WHERE request_id = $1 AND donor_id = $2',
+        [requestId, donorId]
+      );
+
+      if (existingResponse.rows.length > 0) {
+        res.status(200).json({
+          status: 'success',
+          data: {
+            hasResponded: true,
+          },
+        });
+      } else {
+        res.status(200).json({
+          status: 'success',
+          data: {
+            hasResponded: false,
+          },
+        });
+      }
+    } catch (error) {
+      console.error('Check existing response error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to check existing response',
       });
     }
   },
@@ -548,7 +608,9 @@ export const requestController = {
       const result = await pool.query(
         `SELECT 
           br.*,
-          COUNT(dr.id) as response_count
+          COUNT(dr.id) as response_count,
+          ST_X(br.location::geometry) as longitude, 
+          ST_Y(br.location::geometry) as latitude
          FROM blood_requests br
          LEFT JOIN donor_responses dr ON br.id = dr.request_id
          WHERE br.requester_id = $1
